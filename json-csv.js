@@ -20,7 +20,7 @@ function flatten(obj, prefix = '') {
 }
 
 // Load and parse JSON file
-const rawData = fs.readFileSync('combined_sorted.json', 'utf8');
+const rawData = fs.readFileSync('output.json', 'utf8');
 const jsonData = JSON.parse(rawData);
 
 // Flatten all entries
