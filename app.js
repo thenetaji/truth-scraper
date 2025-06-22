@@ -1,25 +1,45 @@
 const fs = require('fs');
 const path = require('path');
+const fse = require('fs-extra');
 const { parser } = require('stream-json');
 const { streamArray } = require('stream-json/streamers/StreamArray');
 const { chain } = require('stream-chain');
-const fse = require('fs-extra');
+const { Parser } = require('json2csv');
 
 // Config
-const folderPath = './data'; // Folder containing your JSON files
-const outputPath = './combined_sorted.json';
+const folderPath = './data'; // Folder with input JSON files
+const outputJsonPath = './output.json';
+const outputCsvPath = './output.csv';
 const DATE_FIELD = 'created_at';
 
-// Clean HTML: Remove <p> and convert <a href="...">text</a> → text (link)
+// 🧼 Clean HTML: Remove <p> and convert <a href="...">text</a> → text (link)
 const cleanContent = (html) => {
   html = html.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi, (_, href, text) => {
     return `${text} (${href})`;
   });
-
   html = html.replace(/<\/?p>/gi, '');
   return html.trim();
 };
 
+// 🔃 Flatten nested JSON into a flat structure
+const flatten = (obj, prefix = '') => {
+  let result = {};
+  for (const key in obj) {
+    const value = obj[key];
+    const newKey = prefix ? `${prefix}.${key}` : key;
+
+    if (Array.isArray(value)) {
+      result[newKey] = JSON.stringify(value); // store array as JSON string
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result = { ...result, ...flatten(value, newKey) };
+    } else {
+      result[newKey] = value;
+    }
+  }
+  return result;
+};
+
+// 📂 Process each file using stream
 const processFile = (filePath, allItems) => {
   return new Promise((resolve, reject) => {
     const pipeline = chain([
@@ -34,8 +54,13 @@ const processFile = (filePath, allItems) => {
       if (value.content) {
         value.content = cleanContent(value.content);
       }
+      if (value.account?.note) {
+        value.account.note = cleanContent(value.account.note);
+      }
       delete value.content_clean;
-      allItems.push(value);
+
+      const flat = flatten(value);
+      allItems.push(flat);
       count++;
     });
 
@@ -48,6 +73,7 @@ const processFile = (filePath, allItems) => {
   });
 };
 
+// 🧩 Load and process all files
 const loadAndProcessAll = async () => {
   const startTime = Date.now();
 
@@ -67,14 +93,20 @@ const loadAndProcessAll = async () => {
   console.log(`\nSorting ${allItems.length} items by ${DATE_FIELD} (latest first)...`);
   allItems.sort((a, b) => new Date(b[DATE_FIELD]) - new Date(a[DATE_FIELD]));
 
-  console.log(`Saving combined data to: ${outputPath}`);
-  await fse.writeJson(outputPath, allItems, { spaces: 2 });
+  console.log(`Saving JSON to: ${outputJsonPath}`);
+  await fse.writeJson(outputJsonPath, allItems, { spaces: 2 });
+
+  console.log(`Saving CSV to: ${outputCsvPath}`);
+  const csvFields = Object.keys(allItems[0] || {});
+  const parser = new Parser({ fields: csvFields });
+  const csv = parser.parse(allItems);
+  fs.writeFileSync(outputCsvPath, csv, 'utf8');
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\nDone. Total items: ${allItems.length}`);
-  console.log(`Total time: ${duration} seconds.`);
+  console.log(`\n✅ Done. Total items: ${allItems.length}`);
+  console.log(`🕒 Total time: ${duration} seconds.`);
 };
 
 loadAndProcessAll().catch(err => {
-  console.error('Error during processing:', err);
+  console.error('❌ Error during processing:', err);
 });
